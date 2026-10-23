@@ -1,142 +1,48 @@
-# IoT Acoustic Device Fingerprinting for Network Security
+# Offline Acoustic Device-Class Classifier
 
-> Identify specific IoT devices (smart bulb vs camera vs speaker) purely from their electromagnetic hum and acoustic signatures — zero network access required.
+Train a local classifier from labeled WAV recordings, evaluate it on a stratified holdout, and score later recordings. Bring your own recordings; this repository contains no generated audio or pre-trained model.
 
-[![Python](https://img.shields.io/badge/Python-3.9+-blue.svg)](https://python.org)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+## Training data
 
----
+Create one subfolder per label. Place WAV recordings for that label inside it, including nested folders if useful. The classifier reads PCM WAV files, converts stereo to mono, and extracts waveform and spectral features. Keep recording conditions consistent between training and prediction because microphone, room, distance, and sample rate can affect the signal.
 
-## The Concept
-
-Every electronic device produces a **unique acoustic fingerprint**:
-- **Coil whine**: switching power supplies emit ultrasonic tones at 10-80 kHz
-- **Fan signatures**: cooling fans have blade-count-specific frequency patterns
-- **Capacitor hum**: aging capacitors produce distinctive low-frequency noise
-- **Vibration patterns**: hard drives, speakers, motors have mechanical resonances
-
-This system uses a microphone (or accelerometer) + deep learning to identify **which specific device model is running** in a room — without connecting to it, scanning its network, or accessing any API.
-
----
-
-## Threat & Defense Context
-
-**Privacy threat**: An attacker with a microphone could determine:
-- Whether a smart speaker (Alexa/Google Home) is in the room
-- If a security camera is active (motor drive signatures)
-- What model of laptop/device the user has (coil whine patterns)
-
-**Defensive use cases**:
-- Corporate network security: detect rogue/unauthorized IoT devices physically present
-- Smart home privacy: verify no unknown listening devices are active
-- Forensics: identify devices present in a room during an incident
-
----
-
-## Model Architecture
-
-```
-Raw Audio (48kHz) → STFT (2048-window, 512-hop)
-                 → Mel Spectrogram (128 bins, 0-24kHz)
-                 → SpecAugment training
-                 → ResNet-18 (modified 1-channel input)
-                 → Device Class (15 device categories)
-                 → Confidence Score
+```text
+recordings/
+  label_a/
+    recording_001.wav
+  label_b/
+    recording_001.wav
 ```
 
-**Device Classes:**
-| Class | Typical Source |
-|-------|---------------|
-| SmartSpeaker_ Alexa | Switching PSU + mic array hum |
-| SmartSpeaker_Google | Different PSU topology |
-| SecurityCamera | IR-cut filter motor + fan |
-| SmartBulb_PhilipsHue | PWM driver signature |
-| SmartPlug | Relay + capacitor |
-| Router_WiFi | Multiple switching regulators |
-| SmartTV_Backlight | LED driver coil whine |
-| Thermostat | Compressor cycling pattern |
-| Doorbell_Video | PIR sensor + speaker driver |
-| Hub_Zigbee | RF oscillator leakage |
-|... | (15 total classes in dataset) |
+The folder structure above describes the required schema; the repository does not include those files.
 
----
+## Train and evaluate
 
-## Usage
-
-### Collect Training Data
+Requires Python 3.9 or newer.
 
 ```bash
-python -m src.audio_collector \
-    --device-label "SecurityCamera" \
-    --duration 300 \
-    --sample-rate 48000 \
-    --output data/raw/
+python -m pip install -r requirements.txt
+python -m src.train --data-dir path/to/recordings --model acoustic_model.joblib --metrics acoustic_metrics.json
 ```
 
-### Train Fingerprint Classifier
+The trainer extracts RMS, peak, zero-crossing rate, spectral centroid, bandwidth, rolloff, entropy, dominant frequency, and dominant-power share. It fits a class-weighted logistic regression model, reports accuracy, balanced accuracy, macro F1, and a confusion matrix on a stratified holdout, then saves a model fitted on all supplied recordings.
+
+Use `--test-size` and `--seed` to change the holdout. Every class needs at least two WAV files. Holdout results are specific to your data; a file-level random split can overstate performance when files from the same recording session appear on both sides. For a stronger evaluation, separate sessions or collection days before training.
+
+## Predict
+
+Score one WAV file or a folder of WAV files:
 
 ```bash
-python -m src.train \
-    --data-dir data/processed/ \
-    --model resnet18 \
-    --epochs 60 \
-    --batch-size 32 \
-    --output checkpoints/iot_acoustic.pt
+python -m src.predict --input path/to/recording.wav --model acoustic_model.joblib --output acoustic_predictions.csv
 ```
 
-### Real-Time Detection
+The output contains the predicted training label and a model score for each known class. The classifier always selects among the labels in its training data; it does not automatically recognize an unknown class, and its scores are not calibrated confidence guarantees.
 
-```bash
-python -m src.detect_live \
-    --model checkpoints/iot_acoustic.pt \
-    --device-index 0 \
-    --threshold 0.85 \
-    --log-file detections.log
-```
+## Scope and privacy
 
----
-
-## Project Structure
-
-```
-iot-acoustic-fingerprinting/
-├── src/
-│   ├── audio_collector.py   # Microphone recording + labeling
-│   ├── features.py          # STFT, mel spectrogram, MFCC
-│   ├── model.py             # ResNet-18 classifier
-│   ├── train.py             # Training loop
-│   ├── detect_live.py       # Real-time inference stream
-│   └── dataset.py           # PyTorch Dataset
-├── data/
-├── checkpoints/
-├── requirements.txt
-├── README.md
-├── LICENSE
-└── .gitignore
-```
-
----
-
-## Accuracy (Expected)
-
-| Scenario | Top-1 | Top-3 |
-|----------|-------|-------|
-| Single device, quiet room | **94%** | **99%** |
-| Multiple devices overlapping | 78% | 92% |
-| 30dB background noise | 67% | 85% |
-| Different recording device | 61% | 79% |
-
----
-
-## References
-
-- **Acoustic side-channel attacks** (Acs & Castiglione, 2017)
-- **Device fingerprinting via EMI** (Wu et al., USENIX Security, 2021)
-- **Coil whine analysis** for power supply identification
-- **ResNet** (He et al., 2015)
-
----
+This is an offline recording classifier, not a live microphone monitor. Use recordings collected with the knowledge and permission of the people involved. It classifies the labels in your own dataset; it does not establish the presence of a specific device model or a person. The code makes no network requests. Only load model artifacts you trust.
 
 ## License
 
-MIT © [sparkx313](https://github.com/sparkx313)
+MIT. See [LICENSE](LICENSE).
